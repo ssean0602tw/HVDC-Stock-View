@@ -297,47 +297,31 @@ with main_tab1:
     
     # 顯示數據
     if st.session_state.tw_data:
-        # 關鍵指標
-        key_tw = ["1519.TW", "6781.TW", "2308.TW", "3665.TW"]
-        cols = st.columns(len(key_tw))
-        for i, t in enumerate(key_tw):
-            if t in st.session_state.tw_data:
-                d = st.session_state.tw_data[t]
-                change = (d["current"] - d["previous"]) / d["previous"] * 100
-                cols[i].metric(
-                    f"{t}\n{d.get('name', '')}", 
-                    f"{d['current']:.2f}", 
-                    f"{change:.2f}%"
-                )
-        
-        st.divider()
-        
-        # 分類標籤
+        # 直接顯示分類標籤
         cat_tabs = st.tabs(list(STOCKS.keys()))
         for i, (category, market_data) in enumerate(STOCKS.items()):
             with cat_tabs[i]:
+                # 建立表格數據
+                table_data = []
                 for t in market_data["台股"]:
                     if t in st.session_state.tw_data:
                         d = st.session_state.tw_data[t]
                         change = (d["current"] - d["previous"]) / d["previous"] * 100
-                        
-                        # 顯示股票資訊
-                        col_info, col_change = st.columns([3, 1])
-                        with col_info:
-                            st.markdown(f"### {t} - {d.get('name', 'N/A')}")
-                        with col_change:
-                            st.metric("漲跌幅", f"{change:.2f}%", f"{change:.2f}%")
-                        
-                        # 顯示價格資訊
-                        col_price1, col_price2, col_price3 = st.columns(3)
-                        with col_price1:
-                            st.metric("現價", f"{d['current']:.2f}")
-                        with col_price2:
-                            st.metric("前價", f"{d['previous']:.2f}")
-                        with col_price3:
-                            st.metric("變化", f"{change:.2f}%", f"{change:.2f}%")
-                        
-                        st.divider()
+                        change_value = d["current"] - d["previous"]
+                        table_data.append({
+                            "代號": t,
+                            "公司名稱": d.get('name', 'N/A'),
+                            "現價": f"{d['current']:.2f}",
+                            "前價": f"{d['previous']:.2f}",
+                            "變化": f"{change_value:+.2f}",
+                            "漲跌幅": f"{change:+.2f}%"
+                        })
+                
+                if table_data:
+                    df = pd.DataFrame(table_data)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("暫無數據")
 
 # --- 美股標籤 ---
 with main_tab2:
@@ -362,47 +346,31 @@ with main_tab2:
     
     # 顯示數據
     if st.session_state.us_data:
-        # 關鍵指標
-        key_us = ["VRT", "EOSE", "ETN", "VST"]
-        cols = st.columns(len(key_us))
-        for i, t in enumerate(key_us):
-            if t in st.session_state.us_data:
-                d = st.session_state.us_data[t]
-                change = (d["current"] - d["previous"]) / d["previous"] * 100
-                cols[i].metric(
-                    f"{t}\n{d.get('name', '')}", 
-                    f"{d['current']:.2f}", 
-                    f"{change:.2f}%"
-                )
-        
-        st.divider()
-        
-        # 分類標籤
+        # 直接顯示分類標籤
         cat_tabs = st.tabs(list(STOCKS.keys()))
         for i, (category, market_data) in enumerate(STOCKS.items()):
             with cat_tabs[i]:
+                # 建立表格數據
+                table_data = []
                 for t in market_data["美股"]:
                     if t in st.session_state.us_data:
                         d = st.session_state.us_data[t]
                         change = (d["current"] - d["previous"]) / d["previous"] * 100
-                        
-                        # 顯示股票資訊
-                        col_info, col_change = st.columns([3, 1])
-                        with col_info:
-                            st.markdown(f"### {t} - {d.get('name', 'N/A')}")
-                        with col_change:
-                            st.metric("漲跌幅", f"{change:.2f}%", f"{change:.2f}%")
-                        
-                        # 顯示價格資訊
-                        col_price1, col_price2, col_price3 = st.columns(3)
-                        with col_price1:
-                            st.metric("現價", f"{d['current']:.2f}")
-                        with col_price2:
-                            st.metric("前價", f"{d['previous']:.2f}")
-                        with col_price3:
-                            st.metric("變化", f"{change:.2f}%", f"{change:.2f}%")
-                        
-                        st.divider()
+                        change_value = d["current"] - d["previous"]
+                        table_data.append({
+                            "代號": t,
+                            "公司名稱": d.get('name', 'N/A'),
+                            "現價": f"{d['current']:.2f}",
+                            "前價": f"{d['previous']:.2f}",
+                            "變化": f"{change_value:+.2f}",
+                            "漲跌幅": f"{change:+.2f}%"
+                        })
+                
+                if table_data:
+                    df = pd.DataFrame(table_data)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("暫無數據")
 
 # --- 新聞區塊 ---
 st.divider()
@@ -411,15 +379,28 @@ n_col1, n_col2, n_col3 = st.columns(3)
 
 with n_col1:
     st.info("💡 重電與電網更新")
-    for item in get_news("變壓器 外銷 美國"):
-        st.caption(f"[{item.title}]({item.link})")
+    news_items = get_news("變壓器 外銷 美國")
+    if news_items:
+        for item in news_items:
+            # 使用 st.markdown 並允許 HTML，確保連結可點擊
+            st.markdown(f'<a href="{item.link}" target="_blank" style="text-decoration: none; color: inherit;">{item.title}</a>', unsafe_allow_html=True)
+    else:
+        st.caption("暫無相關新聞")
         
 with n_col2:
     st.info("🔥 AI 資料中心供電")
-    for item in get_news("NVIDIA 800V HVDC Vertiv"):
-        st.caption(f"[{item.title}]({item.link})")
+    news_items = get_news("NVIDIA 800V HVDC Vertiv")
+    if news_items:
+        for item in news_items:
+            st.markdown(f'<a href="{item.link}" target="_blank" style="text-decoration: none; color: inherit;">{item.title}</a>', unsafe_allow_html=True)
+    else:
+        st.caption("暫無相關新聞")
 
 with n_col3:
     st.info("🔋 儲能與 BBU 趨勢")
-    for item in get_news("EOSE Energy AES-KY 順達"):
-        st.caption(f"[{item.title}]({item.link})")
+    news_items = get_news("EOSE Energy AES-KY 順達")
+    if news_items:
+        for item in news_items:
+            st.markdown(f'<a href="{item.link}" target="_blank" style="text-decoration: none; color: inherit;">{item.title}</a>', unsafe_allow_html=True)
+    else:
+        st.caption("暫無相關新聞")
