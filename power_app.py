@@ -1,7 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.graph_objects as go
 import feedparser
 from datetime import datetime
 
@@ -21,7 +20,7 @@ STOCKS = {
         "美股": ["VRT", "VICR", "MPWR"]
     },
     "BBU/長時儲能": {
-        "台股": ["6781.TW", "3211.TW", "4931.TW", "2327.TW"],
+        "台股": ["6781.TW", "3211.TWO", "4931.TWO", "2327.TW"],
         "美股": ["EOSE", "VST", "CEG"]
     },
     "基建與連接器": {
@@ -33,38 +32,51 @@ STOCKS = {
 # --- 3. 數據抓取邏輯 ---
 @st.cache_data(ttl=60)  # 即時數據快取1分鐘
 def fetch_ticker_data_realtime(ticker):
-    """獲取即時數據（如果開盤），否則使用最新收盤價"""
+    """獲取即時數據（最近5-15分鐘），如果開盤；否則使用最新收盤價"""
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info
         
-        # 獲取公司名稱
-        company_name = info.get('longName', info.get('shortName', ticker))
-        
-        # 嘗試獲取即時數據（1分鐘間隔）
+        # 優化：先獲取價格數據，成功後再獲取公司名稱
+        # 嘗試獲取即時數據（使用5分鐘間隔）
         try:
-            hist_1m = stock.history(period="1d", interval="1m")
-            if not hist_1m.empty and len(hist_1m) > 0:
-                # 有今日數據，使用最新價格
-                current_price = float(hist_1m['Close'].iloc[-1])
-                hist_data = hist_1m
-                previous_price = float(hist_1m['Close'].iloc[0]) if len(hist_1m) > 1 else current_price
-                return current_price, previous_price, company_name, hist_data
-        except:
+            hist_5m = stock.history(period="1d", interval="5m")
+            if not hist_5m.empty and len(hist_5m) > 0:
+                hist_5m = hist_5m.tail(15)  # 只取最後15個數據點
+                if len(hist_5m) > 0:
+                    current_price = float(hist_5m['Close'].iloc[-1])
+                    previous_price = float(hist_5m['Close'].iloc[0]) if len(hist_5m) > 1 else current_price
+                    # 延遲獲取公司名稱，只在成功時獲取
+                    try:
+                        info = stock.info
+                        company_name = info.get('longName', info.get('shortName', ticker))
+                    except:
+                        company_name = ticker
+                    return current_price, previous_price, company_name, hist_5m
+        except Exception as e:
+            # 靜默處理錯誤，繼續嘗試其他方法
             pass
         
         # 如果沒有即時數據，使用日線數據
-        hist_5d = stock.history(period="5d", interval="1d")
-        if not hist_5d.empty:
-            current_price = float(hist_5d['Close'].iloc[-1])
-            hist_data = hist_5d
-            previous_price = float(hist_5d['Close'].iloc[-2]) if len(hist_5d) >= 2 else float(hist_5d['Close'].iloc[0])
-            return current_price, previous_price, company_name, hist_data
+        try:
+            hist_5d = stock.history(period="5d", interval="1d")
+            if not hist_5d.empty and len(hist_5d) > 0:
+                current_price = float(hist_5d['Close'].iloc[-1])
+                previous_price = float(hist_5d['Close'].iloc[-2]) if len(hist_5d) >= 2 else float(hist_5d['Close'].iloc[0])
+                # 延遲獲取公司名稱
+                try:
+                    info = stock.info
+                    company_name = info.get('longName', info.get('shortName', ticker))
+                except:
+                    company_name = ticker
+                return current_price, previous_price, company_name, hist_5d
+        except Exception as e:
+            # 日線數據也失敗，返回 None
+            pass
         
         return None, None, None, None
         
     except Exception as e:
-        print(f"獲取 {ticker} 即時數據失敗: {e}")
+        # 所有嘗試都失敗，靜默返回 None
         return None, None, None, None
 
 @st.cache_data(ttl=300)  # 一日內數據快取5分鐘
@@ -72,73 +84,51 @@ def fetch_ticker_data_1day(ticker):
     """獲取一日內數據"""
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info
         
-        # 獲取公司名稱
-        company_name = info.get('longName', info.get('shortName', ticker))
-        
-        # 獲取1日內數據（每分鐘）
+        # 優化：使用15分鐘間隔而不是1分鐘，大幅減少數據量
         try:
-            hist = stock.history(period="1d", interval="1m")
-            if not hist.empty:
+            # 使用15分鐘間隔，只取最後24個數據點（約6小時）
+            hist = stock.history(period="1d", interval="15m")
+            if not hist.empty and len(hist) > 0:
+                hist = hist.tail(24)  # 只取最後24個數據點
                 current_price = float(hist['Close'].iloc[-1])
                 previous_price = float(hist['Close'].iloc[0]) if len(hist) > 1 else current_price
+                # 延遲獲取公司名稱
+                try:
+                    info = stock.info
+                    company_name = info.get('longName', info.get('shortName', ticker))
+                except:
+                    company_name = ticker
                 return current_price, previous_price, company_name, hist
-        except:
+        except Exception as e:
+            # 靜默處理錯誤，繼續嘗試其他方法
             pass
         
         # 如果沒有分鐘數據，使用日線數據
-        hist = stock.history(period="2d", interval="1d")
-        if hist.empty:
-            return None, None, None, None
+        try:
+            hist = stock.history(period="2d", interval="1d")
+            if not hist.empty and len(hist) > 0:
+                current_price = float(hist['Close'].iloc[-1])
+                previous_price = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else float(hist['Close'].iloc[0])
+                
+                # 延遲獲取公司名稱
+                try:
+                    info = stock.info
+                    company_name = info.get('longName', info.get('shortName', ticker))
+                except:
+                    company_name = ticker
+                
+                return current_price, previous_price, company_name, hist
+        except Exception as e:
+            # 日線數據也失敗，返回 None
+            pass
         
-        current_price = float(hist['Close'].iloc[-1])
-        previous_price = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else float(hist['Close'].iloc[0])
-        
-        return current_price, previous_price, company_name, hist
+        return None, None, None, None
         
     except Exception as e:
-        print(f"獲取 {ticker} 一日內數據失敗: {e}")
+        # 所有嘗試都失敗，靜默返回 None
         return None, None, None, None
 
-def create_candlestick_chart(hist_data, ticker, company_name):
-    """創建K線圖"""
-    try:
-        if hist_data is None or hist_data.empty or len(hist_data) < 2:
-            return None
-        
-        # 確保數據有足夠的列
-        if 'Open' not in hist_data.columns or 'High' not in hist_data.columns or 'Low' not in hist_data.columns or 'Close' not in hist_data.columns:
-            return None
-        
-        # 重置索引
-        df = hist_data.reset_index()
-        
-        # 確定日期列名稱
-        date_col = df.columns[0]
-        
-        fig = go.Figure(data=[go.Candlestick(
-            x=df[date_col] if date_col in df.columns else df.index,
-            open=df['Open'],
-            high=df['High'],
-            low=df['Low'],
-            close=df['Close'],
-            name=ticker
-        )])
-        
-        fig.update_layout(
-            title=f"{ticker} - {company_name} K線圖",
-            xaxis_title="時間",
-            yaxis_title="價格",
-            xaxis_rangeslider_visible=False,
-            height=400,
-            margin=dict(l=0, r=0, t=50, b=0)
-        )
-        
-        return fig
-    except Exception as e:
-        print(f"創建K線圖失敗 {ticker}: {e}")
-        return None
 
 @st.cache_data(ttl=600)
 def get_news(query):
@@ -192,19 +182,30 @@ with main_tab1:
     if st.session_state.tw_mode:
         with st.spinner(f"正在載入台股數據（{'即時' if st.session_state.tw_mode == 'realtime' else '一日內'}）..."):
             tw_tickers = get_tw_tickers()
+            failed_tickers = []
             for ticker in tw_tickers:
-                if st.session_state.tw_mode == "realtime":
-                    current, previous, name, hist = fetch_ticker_data_realtime(ticker)
-                else:
-                    current, previous, name, hist = fetch_ticker_data_1day(ticker)
-                
-                if current is not None:
-                    st.session_state.tw_data[ticker] = {
-                        "current": current,
-                        "previous": previous,
-                        "name": name,
-                        "history": hist
-                    }
+                try:
+                    if st.session_state.tw_mode == "realtime":
+                        current, previous, name, hist = fetch_ticker_data_realtime(ticker)
+                    else:
+                        current, previous, name, hist = fetch_ticker_data_1day(ticker)
+                    
+                    if current is not None:
+                        st.session_state.tw_data[ticker] = {
+                            "current": current,
+                            "previous": previous,
+                            "name": name,
+                            "history": hist
+                        }
+                    else:
+                        failed_tickers.append(ticker)
+                except Exception as e:
+                    print(f"載入 {ticker} 時發生錯誤: {e}")
+                    failed_tickers.append(ticker)
+            
+            # 如果有失敗的股票，顯示警告
+            if failed_tickers:
+                st.warning(f"以下股票無法載入數據：{', '.join(failed_tickers)}")
             st.rerun()
     
     # 顯示數據
@@ -249,12 +250,6 @@ with main_tab1:
                         with col_price3:
                             st.metric("變化", f"{change:.2f}%", f"{change:.2f}%")
                         
-                        # 顯示K線圖
-                        if d.get('history') is not None:
-                            fig = create_candlestick_chart(d['history'], t, d.get('name', ''))
-                            if fig:
-                                st.plotly_chart(fig, use_container_width=True)
-                        
                         st.divider()
 
 # --- 美股標籤 ---
@@ -284,19 +279,30 @@ with main_tab2:
     if st.session_state.us_mode:
         with st.spinner(f"正在載入美股數據（{'即時' if st.session_state.us_mode == 'realtime' else '一日內'}）..."):
             us_tickers = get_us_tickers()
+            failed_tickers = []
             for ticker in us_tickers:
-                if st.session_state.us_mode == "realtime":
-                    current, previous, name, hist = fetch_ticker_data_realtime(ticker)
-                else:
-                    current, previous, name, hist = fetch_ticker_data_1day(ticker)
-                
-                if current is not None:
-                    st.session_state.us_data[ticker] = {
-                        "current": current,
-                        "previous": previous,
-                        "name": name,
-                        "history": hist
-                    }
+                try:
+                    if st.session_state.us_mode == "realtime":
+                        current, previous, name, hist = fetch_ticker_data_realtime(ticker)
+                    else:
+                        current, previous, name, hist = fetch_ticker_data_1day(ticker)
+                    
+                    if current is not None:
+                        st.session_state.us_data[ticker] = {
+                            "current": current,
+                            "previous": previous,
+                            "name": name,
+                            "history": hist
+                        }
+                    else:
+                        failed_tickers.append(ticker)
+                except Exception as e:
+                    print(f"載入 {ticker} 時發生錯誤: {e}")
+                    failed_tickers.append(ticker)
+            
+            # 如果有失敗的股票，顯示警告
+            if failed_tickers:
+                st.warning(f"以下股票無法載入數據：{', '.join(failed_tickers)}")
             st.rerun()
     
     # 顯示數據
@@ -340,12 +346,6 @@ with main_tab2:
                             st.metric("前價", f"{d['previous']:.2f}")
                         with col_price3:
                             st.metric("變化", f"{change:.2f}%", f"{change:.2f}%")
-                        
-                        # 顯示K線圖
-                        if d.get('history') is not None:
-                            fig = create_candlestick_chart(d['history'], t, d.get('name', ''))
-                            if fig:
-                                st.plotly_chart(fig, use_container_width=True)
                         
                         st.divider()
 
