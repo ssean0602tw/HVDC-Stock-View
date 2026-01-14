@@ -2,7 +2,8 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import feedparser
-from datetime import datetime
+from datetime import datetime, timedelta
+import urllib.parse
 import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 
@@ -250,12 +251,66 @@ def fetch_multiple_tickers_batch(tickers):
 
 
 @st.cache_data(ttl=600)
-def get_news(query):
+def get_news(query, language="zh-TW", max_results=5):
+    """獲取新聞，支援中文和英文，限制為一個月內"""
     try:
-        rss_url = f"https://news.google.com/rss/search?q={query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        # URL 編碼查詢字串
+        encoded_query = urllib.parse.quote(query)
+        
+        # 計算一個月前的日期
+        one_month_ago = datetime.now() - timedelta(days=30)
+        
+        # 根據語言設定參數
+        if language == "zh-TW":
+            rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        else:
+            rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en&gl=US&ceid=US:en"
+        
         feed = feedparser.parse(rss_url)
-        return feed.entries[:3] if feed.entries else []
-    except:
+        
+        if feed.entries:
+            results = []
+            for entry in feed.entries:
+                if len(results) >= max_results:
+                    break
+                    
+                # 檢查新聞日期是否在一個月內
+                try:
+                    pub_date = entry.get('published_parsed')
+                    if pub_date:
+                        pub_datetime = datetime(*pub_date[:6])
+                        if pub_datetime < one_month_ago:
+                            continue  # 跳過超過一個月的新聞
+                except:
+                    # 如果日期解析失敗，仍然包含這條新聞（可能是最新新聞）
+                    pass
+                
+                # 提取真實連結
+                link = entry.get('link', '')
+                if 'url=' in link:
+                    try:
+                        from urllib.parse import urlparse, parse_qs, unquote
+                        parsed = urlparse(link)
+                        params = parse_qs(parsed.query)
+                        if 'url' in params:
+                            real_url = unquote(params['url'][0])
+                        else:
+                            real_url = link
+                    except:
+                        real_url = link
+                else:
+                    real_url = link
+                
+                results.append({
+                    'title': entry.get('title', '無標題'),
+                    'link': real_url,
+                    'published': entry.get('published', '')
+                })
+            
+            return results
+        return []
+    except Exception as e:
+        print(f"獲取新聞失敗 ({query}): {str(e)[:100]}")
         return []
 
 # --- 4. 收集代號 ---
@@ -322,6 +377,25 @@ with main_tab1:
                     st.dataframe(df, use_container_width=True, hide_index=True)
                 else:
                     st.info("暫無數據")
+                
+                # 顯示相關中文新聞
+                st.subheader("📰 相關新聞（中文）")
+                # 收集該分類的所有台股名稱和代號
+                search_terms = []
+                for t in market_data["台股"]:
+                    if t in COMPANY_NAMES:
+                        search_terms.append(COMPANY_NAMES[t])
+                        search_terms.append(t.replace('.TW', '').replace('.TWO', ''))
+                
+                if search_terms:
+                    # 組合搜尋關鍵字
+                    query = " OR ".join(search_terms[:5])  # 限制關鍵字數量
+                    news_items = get_news(query, language="zh-TW", max_results=5)
+                    if news_items:
+                        for item in news_items:
+                            st.markdown(f'<a href="{item["link"]}" target="_blank" style="text-decoration: none; color: #1f77b4;">{item["title"]}</a>', unsafe_allow_html=True)
+                    else:
+                        st.caption("暫無相關新聞")
 
 # --- 美股標籤 ---
 with main_tab2:
@@ -371,36 +445,26 @@ with main_tab2:
                     st.dataframe(df, use_container_width=True, hide_index=True)
                 else:
                     st.info("暫無數據")
+                
+                # 顯示相關英文新聞
+                st.subheader("📰 Related News (English)")
+                # 收集該分類的所有美股名稱和代號
+                search_terms = []
+                for t in market_data["美股"]:
+                    if t in COMPANY_NAMES:
+                        company_name = COMPANY_NAMES[t]
+                        # 提取公司名稱的主要部分（去掉 Inc, Corp 等）
+                        main_name = company_name.split()[0] if company_name.split() else company_name
+                        search_terms.append(main_name)
+                        search_terms.append(t)
+                
+                if search_terms:
+                    # 組合搜尋關鍵字
+                    query = " OR ".join(search_terms[:5])  # 限制關鍵字數量
+                    news_items = get_news(query, language="en", max_results=5)
+                    if news_items:
+                        for item in news_items:
+                            st.markdown(f'<a href="{item["link"]}" target="_blank" style="text-decoration: none; color: #1f77b4;">{item["title"]}</a>', unsafe_allow_html=True)
+                    else:
+                        st.caption("No related news")
 
-# --- 新聞區塊 ---
-st.divider()
-st.subheader("📰 產業鏈即時情報")
-n_col1, n_col2, n_col3 = st.columns(3)
-
-with n_col1:
-    st.info("💡 重電與電網更新")
-    news_items = get_news("變壓器 外銷 美國")
-    if news_items:
-        for item in news_items:
-            # 使用 st.markdown 並允許 HTML，確保連結可點擊
-            st.markdown(f'<a href="{item.link}" target="_blank" style="text-decoration: none; color: inherit;">{item.title}</a>', unsafe_allow_html=True)
-    else:
-        st.caption("暫無相關新聞")
-        
-with n_col2:
-    st.info("🔥 AI 資料中心供電")
-    news_items = get_news("NVIDIA 800V HVDC Vertiv")
-    if news_items:
-        for item in news_items:
-            st.markdown(f'<a href="{item.link}" target="_blank" style="text-decoration: none; color: inherit;">{item.title}</a>', unsafe_allow_html=True)
-    else:
-        st.caption("暫無相關新聞")
-
-with n_col3:
-    st.info("🔋 儲能與 BBU 趨勢")
-    news_items = get_news("EOSE Energy AES-KY 順達")
-    if news_items:
-        for item in news_items:
-            st.markdown(f'<a href="{item.link}" target="_blank" style="text-decoration: none; color: inherit;">{item.title}</a>', unsafe_allow_html=True)
-    else:
-        st.caption("暫無相關新聞")
