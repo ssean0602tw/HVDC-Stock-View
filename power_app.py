@@ -34,16 +34,48 @@ STOCKS = {
 @st.cache_data(ttl=300) # 每 5 分鐘快取一次，避免被 Yahoo 封鎖
 def fetch_data(ticker_list):
     try:
-        data = yf.download(ticker_list, period="2d", interval="15m")
+        # 使用 progress=False 和較短的 period 來加快速度
+        data = yf.download(ticker_list, period="1d", interval="1h", progress=False, group_by='ticker', threads=True)
         return data
     except Exception as e:
-        st.error(f"數據抓取失敗: {e}")
+        print(f"數據抓取失敗: {e}")  # 使用 print 而不是 st.error（在緩存函數中）
         return None
 
+def get_price_data(raw_data, ticker):
+    """從 yfinance 返回的數據中提取指定股票的價格數據"""
+    try:
+        if raw_data is None or raw_data.empty:
+            return None, None
+            
+        # 處理 MultiIndex 結構（多個股票）
+        if isinstance(raw_data.columns, pd.MultiIndex):
+            if ticker in raw_data.columns.levels[0]:
+                close_data = raw_data[(ticker, 'Close')]
+                if len(close_data) > 0:
+                    current = float(close_data.iloc[-1])
+                    previous = float(close_data.iloc[0])
+                    return current, previous
+        else:
+            # 單個股票的情況
+            if 'Close' in raw_data.columns:
+                close_data = raw_data['Close']
+                if len(close_data) > 0:
+                    current = float(close_data.iloc[-1])
+                    previous = float(close_data.iloc[0])
+                    return current, previous
+    except Exception as e:
+        print(f"提取 {ticker} 價格時發生錯誤: {e}")
+    return None, None
+
+@st.cache_data(ttl=600)  # 新聞快取 10 分鐘
 def get_news(query):
-    rss_url = f"https://news.google.com/rss/search?q={query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-    feed = feedparser.parse(rss_url)
-    return feed.entries[:3]
+    try:
+        rss_url = f"https://news.google.com/rss/search?q={query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+        feed = feedparser.parse(rss_url)
+        return feed.entries[:3] if feed.entries else []
+    except Exception as e:
+        print(f"新聞抓取失敗: {e}")
+        return []
 
 # --- 4. 網頁 UI 佈局 ---
 
@@ -52,7 +84,9 @@ all_tickers = []
 for cat in STOCKS.values():
     all_tickers.extend(cat["台股"] + cat["美股"])
 
-raw_data = fetch_data(all_tickers)
+# 添加載入指示器
+with st.spinner("正在載入數據，請稍候..."):
+    raw_data = fetch_data(all_tickers)
 
 if raw_data is not None:
     # A. 頂部快訊指標卡
@@ -63,11 +97,12 @@ if raw_data is not None:
     
     for i, t in enumerate(key_metrics):
         try:
-            current_p = raw_data['Close'][t].iloc[-1]
-            prev_p = raw_data['Close'][t].iloc[0]
-            change_pct = (current_p - prev_p) / prev_p * 100
-            m_cols[i].metric(label=t, value=f"{current_p:.2f}", delta=f"{change_pct:.2f}%")
-        except:
+            current_p, prev_p = get_price_data(raw_data, t)
+            if current_p is not None and prev_p is not None:
+                change_pct = (current_p - prev_p) / prev_p * 100
+                m_cols[i].metric(label=t, value=f"{current_p:.2f}", delta=f"{change_pct:.2f}%")
+        except Exception as e:
+            print(f"處理 {t} 時發生錯誤: {e}")
             continue
 
     st.divider()
@@ -82,21 +117,31 @@ if raw_data is not None:
             
             with col_l:
                 st.write(f"### {category} - 台股追蹤")
-                tw_df = pd.DataFrame({
-                    "代號": market_data["台股"],
-                    "現價": [f"{raw_data['Close'][t].iloc[-1]:.2f}" for t in market_data["台股"]],
-                    "漲跌幅": [f"{(raw_data['Close'][t].iloc[-1]/raw_data['Close'][t].iloc[0]-1)*100:.2f}%" for t in market_data["台股"]]
-                })
-                st.table(tw_df)
+                tw_rows = []
+                for t in market_data["台股"]:
+                    current, previous = get_price_data(raw_data, t)
+                    if current is not None and previous is not None:
+                        change_pct = (current - previous) / previous * 100
+                        tw_rows.append({"代號": t, "現價": f"{current:.2f}", "漲跌幅": f"{change_pct:.2f}%"})
+                    else:
+                        tw_rows.append({"代號": t, "現價": "N/A", "漲跌幅": "N/A"})
+                if tw_rows:
+                    tw_df = pd.DataFrame(tw_rows)
+                    st.table(tw_df)
 
             with col_r:
                 st.write(f"### {category} - 美股追蹤")
-                us_df = pd.DataFrame({
-                    "代號": market_data["美股"],
-                    "現價": [f"{raw_data['Close'][t].iloc[-1]:.2f}" for t in market_data["美股"]],
-                    "漲跌幅": [f"{(raw_data['Close'][t].iloc[-1]/raw_data['Close'][t].iloc[0]-1)*100:.2f}%" for t in market_data["美股"]]
-                })
-                st.table(us_df)
+                us_rows = []
+                for t in market_data["美股"]:
+                    current, previous = get_price_data(raw_data, t)
+                    if current is not None and previous is not None:
+                        change_pct = (current - previous) / previous * 100
+                        us_rows.append({"代號": t, "現價": f"{current:.2f}", "漲跌幅": f"{change_pct:.2f}%"})
+                    else:
+                        us_rows.append({"代號": t, "現價": "N/A", "漲跌幅": "N/A"})
+                if us_rows:
+                    us_df = pd.DataFrame(us_rows)
+                    st.table(us_df)
 
     st.divider()
 
