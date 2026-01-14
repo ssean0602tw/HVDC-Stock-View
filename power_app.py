@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import feedparser
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- 1. 頁面基礎設定 ---
 st.set_page_config(page_title="台美 AI 電力鏈監控終端", layout="wide")
@@ -29,6 +30,44 @@ STOCKS = {
     }
 }
 
+# 股票代號對應公司名稱
+COMPANY_NAMES = {
+    # 台股 - 重電/變壓器
+    "1519.TW": "華城",
+    "1503.TW": "士電",
+    "2371.TW": "大同",
+    "1514.TW": "亞力",
+    # 台股 - AI 供電/800V
+    "2308.TW": "台達電",
+    "2301.TW": "光寶科",
+    "2360.TW": "致茂",
+    # 台股 - BBU/長時儲能
+    "6781.TW": "AES-KY",
+    "3211.TWO": "順達",
+    "4931.TWO": "新盛力",
+    "2327.TW": "國巨",
+    # 台股 - 基建與連接器
+    "3665.TW": "貿聯-KY",
+    "2317.TW": "鴻海",
+    "2382.TW": "廣達",
+    "6669.TW": "緯穎",
+    # 美股 - 重電/變壓器
+    "ETN": "Eaton Corporation",
+    "GEV": "GE Vernova",
+    "HUBB": "Hubbell Incorporated",
+    # 美股 - AI 供電/800V
+    "VRT": "Vertiv Holdings Co",
+    "VICR": "Vicor Corporation",
+    "MPWR": "Monolithic Power Systems",
+    # 美股 - BBU/長時儲能
+    "EOSE": "Eos Energy Enterprises",
+    "VST": "Vistra Corp",
+    "CEG": "Constellation Energy",
+    # 美股 - 基建與連接器
+    "PWR": "Quanta Services",
+    "NVT": "nVent Electric"
+}
+
 # --- 3. 數據抓取邏輯 ---
 @st.cache_data(ttl=60)  # 即時數據快取1分鐘
 def fetch_ticker_data_realtime(ticker):
@@ -36,7 +75,6 @@ def fetch_ticker_data_realtime(ticker):
     try:
         stock = yf.Ticker(ticker)
         
-        # 優化：先獲取價格數據，成功後再獲取公司名稱
         # 嘗試獲取即時數據（使用5分鐘間隔）
         try:
             hist_5m = stock.history(period="1d", interval="5m")
@@ -45,15 +83,8 @@ def fetch_ticker_data_realtime(ticker):
                 if len(hist_5m) > 0:
                     current_price = float(hist_5m['Close'].iloc[-1])
                     previous_price = float(hist_5m['Close'].iloc[0]) if len(hist_5m) > 1 else current_price
-                    # 延遲獲取公司名稱，只在成功時獲取
-                    try:
-                        info = stock.info
-                        company_name = info.get('longName', info.get('shortName', ticker))
-                    except:
-                        company_name = ticker
-                    return current_price, previous_price, company_name, hist_5m
-        except Exception as e:
-            # 靜默處理錯誤，繼續嘗試其他方法
+                    return current_price, previous_price, hist_5m
+        except:
             pass
         
         # 如果沒有即時數據，使用日線數據
@@ -62,22 +93,14 @@ def fetch_ticker_data_realtime(ticker):
             if not hist_5d.empty and len(hist_5d) > 0:
                 current_price = float(hist_5d['Close'].iloc[-1])
                 previous_price = float(hist_5d['Close'].iloc[-2]) if len(hist_5d) >= 2 else float(hist_5d['Close'].iloc[0])
-                # 延遲獲取公司名稱
-                try:
-                    info = stock.info
-                    company_name = info.get('longName', info.get('shortName', ticker))
-                except:
-                    company_name = ticker
-                return current_price, previous_price, company_name, hist_5d
-        except Exception as e:
-            # 日線數據也失敗，返回 None
+                return current_price, previous_price, hist_5d
+        except:
             pass
         
-        return None, None, None, None
+        return None, None, None
         
-    except Exception as e:
-        # 所有嘗試都失敗，靜默返回 None
-        return None, None, None, None
+    except:
+        return None, None, None
 
 @st.cache_data(ttl=300)  # 一日內數據快取5分鐘
 def fetch_ticker_data_1day(ticker):
@@ -93,15 +116,8 @@ def fetch_ticker_data_1day(ticker):
                 hist = hist.tail(24)  # 只取最後24個數據點
                 current_price = float(hist['Close'].iloc[-1])
                 previous_price = float(hist['Close'].iloc[0]) if len(hist) > 1 else current_price
-                # 延遲獲取公司名稱
-                try:
-                    info = stock.info
-                    company_name = info.get('longName', info.get('shortName', ticker))
-                except:
-                    company_name = ticker
-                return current_price, previous_price, company_name, hist
-        except Exception as e:
-            # 靜默處理錯誤，繼續嘗試其他方法
+                return current_price, previous_price, hist
+        except:
             pass
         
         # 如果沒有分鐘數據，使用日線數據
@@ -110,24 +126,45 @@ def fetch_ticker_data_1day(ticker):
             if not hist.empty and len(hist) > 0:
                 current_price = float(hist['Close'].iloc[-1])
                 previous_price = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else float(hist['Close'].iloc[0])
-                
-                # 延遲獲取公司名稱
-                try:
-                    info = stock.info
-                    company_name = info.get('longName', info.get('shortName', ticker))
-                except:
-                    company_name = ticker
-                
-                return current_price, previous_price, company_name, hist
-        except Exception as e:
-            # 日線數據也失敗，返回 None
+                return current_price, previous_price, hist
+        except:
             pass
         
-        return None, None, None, None
+        return None, None, None
         
-    except Exception as e:
-        # 所有嘗試都失敗，靜默返回 None
-        return None, None, None, None
+    except:
+        return None, None, None
+
+def fetch_multiple_tickers_parallel(tickers, mode):
+    """並行獲取多個股票的數據"""
+    results = {}
+    
+    def fetch_one(ticker):
+        try:
+            if mode == "realtime":
+                return ticker, fetch_ticker_data_realtime(ticker)
+            else:
+                return ticker, fetch_ticker_data_1day(ticker)
+        except:
+            return ticker, (None, None, None)
+    
+    # 使用線程池並行處理
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(fetch_one, ticker): ticker for ticker in tickers}
+        for future in as_completed(futures):
+            ticker, result = future.result()
+            current, previous, hist = result
+            if current is not None:
+                # 從字典中獲取公司名稱
+                company_name = COMPANY_NAMES.get(ticker, ticker)
+                results[ticker] = {
+                    "current": current,
+                    "previous": previous,
+                    "name": company_name,
+                    "history": hist
+                }
+    
+    return results
 
 
 @st.cache_data(ttl=600)
@@ -182,28 +219,12 @@ with main_tab1:
     if st.session_state.tw_mode:
         with st.spinner(f"正在載入台股數據（{'即時' if st.session_state.tw_mode == 'realtime' else '一日內'}）..."):
             tw_tickers = get_tw_tickers()
-            failed_tickers = []
-            for ticker in tw_tickers:
-                try:
-                    if st.session_state.tw_mode == "realtime":
-                        current, previous, name, hist = fetch_ticker_data_realtime(ticker)
-                    else:
-                        current, previous, name, hist = fetch_ticker_data_1day(ticker)
-                    
-                    if current is not None:
-                        st.session_state.tw_data[ticker] = {
-                            "current": current,
-                            "previous": previous,
-                            "name": name,
-                            "history": hist
-                        }
-                    else:
-                        failed_tickers.append(ticker)
-                except Exception as e:
-                    print(f"載入 {ticker} 時發生錯誤: {e}")
-                    failed_tickers.append(ticker)
+            # 使用並行處理獲取數據
+            results = fetch_multiple_tickers_parallel(tw_tickers, st.session_state.tw_mode)
+            st.session_state.tw_data = results
             
-            # 如果有失敗的股票，顯示警告
+            # 檢查失敗的股票
+            failed_tickers = [t for t in tw_tickers if t not in results]
             if failed_tickers:
                 st.warning(f"以下股票無法載入數據：{', '.join(failed_tickers)}")
             st.rerun()
@@ -279,28 +300,12 @@ with main_tab2:
     if st.session_state.us_mode:
         with st.spinner(f"正在載入美股數據（{'即時' if st.session_state.us_mode == 'realtime' else '一日內'}）..."):
             us_tickers = get_us_tickers()
-            failed_tickers = []
-            for ticker in us_tickers:
-                try:
-                    if st.session_state.us_mode == "realtime":
-                        current, previous, name, hist = fetch_ticker_data_realtime(ticker)
-                    else:
-                        current, previous, name, hist = fetch_ticker_data_1day(ticker)
-                    
-                    if current is not None:
-                        st.session_state.us_data[ticker] = {
-                            "current": current,
-                            "previous": previous,
-                            "name": name,
-                            "history": hist
-                        }
-                    else:
-                        failed_tickers.append(ticker)
-                except Exception as e:
-                    print(f"載入 {ticker} 時發生錯誤: {e}")
-                    failed_tickers.append(ticker)
+            # 使用並行處理獲取數據
+            results = fetch_multiple_tickers_parallel(us_tickers, st.session_state.us_mode)
+            st.session_state.us_data = results
             
-            # 如果有失敗的股票，顯示警告
+            # 檢查失敗的股票
+            failed_tickers = [t for t in us_tickers if t not in results]
             if failed_tickers:
                 st.warning(f"以下股票無法載入數據：{', '.join(failed_tickers)}")
             st.rerun()
