@@ -34,11 +34,11 @@ STOCKS = {
 @st.cache_data(ttl=300) # 每 5 分鐘快取一次，避免被 Yahoo 封鎖
 def fetch_data(ticker_list):
     try:
-        # 使用 progress=False 和較短的 period 來加快速度
-        data = yf.download(ticker_list, period="1d", interval="1h", progress=False, group_by='ticker', threads=True)
+        # 使用日線數據加快速度
+        data = yf.download(ticker_list, period="5d", interval="1d", progress=False, group_by='ticker', threads=True)
         return data
     except Exception as e:
-        print(f"數據抓取失敗: {e}")  # 使用 print 而不是 st.error（在緩存函數中）
+        print(f"數據抓取失敗: {e}")
         return None
 
 def get_price_data(raw_data, ticker):
@@ -77,49 +77,60 @@ def get_news(query):
         print(f"新聞抓取失敗: {e}")
         return []
 
-# --- 4. 網頁 UI 佈局 ---
+# --- 4. 收集台股和美股代號 ---
+def get_tw_tickers():
+    """收集所有台股代號"""
+    tw_tickers = []
+    for cat in STOCKS.values():
+        tw_tickers.extend(cat["台股"])
+    return tw_tickers
 
-# 整理所有代號
-all_tickers = []
-for cat in STOCKS.values():
-    all_tickers.extend(cat["台股"] + cat["美股"])
+def get_us_tickers():
+    """收集所有美股代號"""
+    us_tickers = []
+    for cat in STOCKS.values():
+        us_tickers.extend(cat["美股"])
+    return us_tickers
 
-# 添加載入指示器
-with st.spinner("正在載入數據，請稍候..."):
-    raw_data = fetch_data(all_tickers)
+# --- 5. 網頁 UI 佈局 ---
 
-if raw_data is not None:
-    # A. 頂部快訊指標卡
-    st.subheader("📊 關鍵標的即時行情")
-    # 挑選四個最具指標性的標的顯示在最上方
-    key_metrics = ["1519.TW", "VRT", "6781.TW", "EOSE"]
-    m_cols = st.columns(len(key_metrics))
+# 使用主要標籤頁分開台股和美股
+main_tab1, main_tab2 = st.tabs(["📈 台股", "📊 美股"])
+
+# --- 台股標籤 ---
+with main_tab1:
+    # 收集台股代號
+    tw_tickers = get_tw_tickers()
     
-    for i, t in enumerate(key_metrics):
-        try:
-            current_p, prev_p = get_price_data(raw_data, t)
-            if current_p is not None and prev_p is not None:
-                change_pct = (current_p - prev_p) / prev_p * 100
-                m_cols[i].metric(label=t, value=f"{current_p:.2f}", delta=f"{change_pct:.2f}%")
-        except Exception as e:
-            print(f"處理 {t} 時發生錯誤: {e}")
-            continue
-
-    st.divider()
-
-    # B. 詳細分類表格與圖表
-    tab1, tab2, tab3, tab4 = st.tabs(list(STOCKS.keys()))
+    # 只在台股標籤被選中時載入數據
+    with st.spinner("正在載入台股數據..."):
+        tw_data = fetch_data(tw_tickers)
     
-    tabs = [tab1, tab2, tab3, tab4]
-    for i, (category, market_data) in enumerate(STOCKS.items()):
-        with tabs[i]:
-            col_l, col_r = st.columns([1, 1])
-            
-            with col_l:
+    if tw_data is not None and not tw_data.empty:
+        # 台股關鍵指標
+        st.subheader("📊 台股關鍵標的")
+        key_tw = ["1519.TW", "6781.TW", "2308.TW", "3665.TW"]
+        tw_cols = st.columns(len(key_tw))
+        
+        for i, t in enumerate(key_tw):
+            try:
+                current_p, prev_p = get_price_data(tw_data, t)
+                if current_p is not None and prev_p is not None:
+                    change_pct = (current_p - prev_p) / prev_p * 100
+                    tw_cols[i].metric(label=t, value=f"{current_p:.2f}", delta=f"{change_pct:.2f}%")
+            except:
+                continue
+        
+        st.divider()
+        
+        # 台股分類標籤
+        cat_tabs = st.tabs(list(STOCKS.keys()))
+        for i, (category, market_data) in enumerate(STOCKS.items()):
+            with cat_tabs[i]:
                 st.write(f"### {category} - 台股追蹤")
                 tw_rows = []
                 for t in market_data["台股"]:
-                    current, previous = get_price_data(raw_data, t)
+                    current, previous = get_price_data(tw_data, t)
                     if current is not None and previous is not None:
                         change_pct = (current - previous) / previous * 100
                         tw_rows.append({"代號": t, "現價": f"{current:.2f}", "漲跌幅": f"{change_pct:.2f}%"})
@@ -128,12 +139,43 @@ if raw_data is not None:
                 if tw_rows:
                     tw_df = pd.DataFrame(tw_rows)
                     st.table(tw_df)
+    else:
+        st.warning("無法載入台股數據，請稍後再試。")
 
-            with col_r:
+# --- 美股標籤 ---
+with main_tab2:
+    # 收集美股代號
+    us_tickers = get_us_tickers()
+    
+    # 只在美股標籤被選中時載入數據
+    with st.spinner("正在載入美股數據..."):
+        us_data = fetch_data(us_tickers)
+    
+    if us_data is not None and not us_data.empty:
+        # 美股關鍵指標
+        st.subheader("📊 美股關鍵標的")
+        key_us = ["VRT", "EOSE", "ETN", "VST"]
+        us_cols = st.columns(len(key_us))
+        
+        for i, t in enumerate(key_us):
+            try:
+                current_p, prev_p = get_price_data(us_data, t)
+                if current_p is not None and prev_p is not None:
+                    change_pct = (current_p - prev_p) / prev_p * 100
+                    us_cols[i].metric(label=t, value=f"{current_p:.2f}", delta=f"{change_pct:.2f}%")
+            except:
+                continue
+        
+        st.divider()
+        
+        # 美股分類標籤
+        cat_tabs = st.tabs(list(STOCKS.keys()))
+        for i, (category, market_data) in enumerate(STOCKS.items()):
+            with cat_tabs[i]:
                 st.write(f"### {category} - 美股追蹤")
                 us_rows = []
                 for t in market_data["美股"]:
-                    current, previous = get_price_data(raw_data, t)
+                    current, previous = get_price_data(us_data, t)
                     if current is not None and previous is not None:
                         change_pct = (current - previous) / previous * 100
                         us_rows.append({"代號": t, "現價": f"{current:.2f}", "漲跌幅": f"{change_pct:.2f}%"})
@@ -142,28 +184,25 @@ if raw_data is not None:
                 if us_rows:
                     us_df = pd.DataFrame(us_rows)
                     st.table(us_df)
+    else:
+        st.warning("無法載入美股數據，請稍後再試。")
 
-    st.divider()
+# --- 6. 新聞區塊（兩個標籤都顯示）---
+st.divider()
+st.subheader("📰 產業鏈即時情報")
+n_col1, n_col2, n_col3 = st.columns(3)
 
-    # C. 全球電力鏈新聞 (依據熱點自動搜尋)
-    st.subheader("📰 產業鏈即時情報")
-    n_col1, n_col2, n_col3 = st.columns(3)
-    
-    with n_col1:
-        st.info("💡 重電與電網更新")
-        for item in get_news("變壓器 外銷 美國"):
-            st.caption(f"[{item.title}]({item.link})")
-            
-    with n_col2:
-        st.info("🔥 AI 資料中心供電")
-        for item in get_news("NVIDIA 800V HVDC Vertiv"):
-            st.caption(f"[{item.title}]({item.link})")
+with n_col1:
+    st.info("💡 重電與電網更新")
+    for item in get_news("變壓器 外銷 美國"):
+        st.caption(f"[{item.title}]({item.link})")
+        
+with n_col2:
+    st.info("🔥 AI 資料中心供電")
+    for item in get_news("NVIDIA 800V HVDC Vertiv"):
+        st.caption(f"[{item.title}]({item.link})")
 
-    with n_col3:
-        st.info("🔋 儲能與 BBU 趨勢")
-        for item in get_news("EOSE Energy AES-KY 順達"):
-            st.caption(f"[{item.title}]({item.link})")
-
-else:
-    st.warning("請檢查網路連線或稍後再試，目前無法取得數據。")
-
+with n_col3:
+    st.info("🔋 儲能與 BBU 趨勢")
+    for item in get_news("EOSE Energy AES-KY 順達"):
+        st.caption(f"[{item.title}]({item.link})")
