@@ -3,7 +3,8 @@ import yfinance as yf
 import pandas as pd
 import feedparser
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning)
 
 # --- 1. 頁面基礎設定 ---
 st.set_page_config(page_title="台美 AI 電力鏈監控終端", layout="wide")
@@ -135,34 +136,134 @@ def fetch_ticker_data_1day(ticker):
     except:
         return None, None, None
 
-def fetch_multiple_tickers_parallel(tickers, mode):
-    """並行獲取多個股票的數據"""
+def fetch_multiple_tickers_batch(tickers, mode):
+    """批量獲取多個股票的數據（使用 yfinance 批量下載）"""
     results = {}
     
-    def fetch_one(ticker):
-        try:
-            if mode == "realtime":
-                return ticker, fetch_ticker_data_realtime(ticker)
-            else:
-                return ticker, fetch_ticker_data_1day(ticker)
-        except:
-            return ticker, (None, None, None)
+    try:
+        # 使用 yfinance 的批量下載功能
+        if mode == "realtime":
+            # 即時模式：使用5分鐘間隔
+            try:
+                data = yf.download(tickers, period="1d", interval="5m", progress=False, group_by='ticker', threads=True)
+                if isinstance(data.columns, pd.MultiIndex):
+                    # 多個股票的情況
+                    for ticker in tickers:
+                        try:
+                            if ticker in data.columns.levels[0]:
+                                ticker_data = data[ticker]
+                                if 'Close' in ticker_data.columns:
+                                    close_data = ticker_data['Close'].tail(15)
+                                    if len(close_data) > 0:
+                                        current_price = float(close_data.iloc[-1])
+                                        previous_price = float(close_data.iloc[0]) if len(close_data) > 1 else current_price
+                                        company_name = COMPANY_NAMES.get(ticker, ticker)
+                                        results[ticker] = {
+                                            "current": current_price,
+                                            "previous": previous_price,
+                                            "name": company_name,
+                                            "history": ticker_data.tail(15)
+                                        }
+                        except:
+                            pass
+                elif len(tickers) == 1:
+                    # 單個股票的情況
+                    ticker = tickers[0]
+                    if 'Close' in data.columns:
+                        close_data = data['Close'].tail(15)
+                        if len(close_data) > 0:
+                            current_price = float(close_data.iloc[-1])
+                            previous_price = float(close_data.iloc[0]) if len(close_data) > 1 else current_price
+                            company_name = COMPANY_NAMES.get(ticker, ticker)
+                            results[ticker] = {
+                                "current": current_price,
+                                "previous": previous_price,
+                                "name": company_name,
+                                "history": data.tail(15)
+                            }
+            except:
+                # 如果批量下載失敗，回退到逐個獲取
+                pass
+        else:
+            # 一日內模式：使用15分鐘間隔
+            try:
+                data = yf.download(tickers, period="1d", interval="15m", progress=False, group_by='ticker', threads=True)
+                if isinstance(data.columns, pd.MultiIndex):
+                    for ticker in tickers:
+                        try:
+                            if ticker in data.columns.levels[0]:
+                                ticker_data = data[ticker]
+                                if 'Close' in ticker_data.columns:
+                                    close_data = ticker_data['Close'].tail(24)
+                                    if len(close_data) > 0:
+                                        current_price = float(close_data.iloc[-1])
+                                        previous_price = float(close_data.iloc[0]) if len(close_data) > 1 else current_price
+                                        company_name = COMPANY_NAMES.get(ticker, ticker)
+                                        results[ticker] = {
+                                            "current": current_price,
+                                            "previous": previous_price,
+                                            "name": company_name,
+                                            "history": ticker_data.tail(24)
+                                        }
+                        except:
+                            pass
+                elif len(tickers) == 1:
+                    ticker = tickers[0]
+                    if 'Close' in data.columns:
+                        close_data = data['Close'].tail(24)
+                        if len(close_data) > 0:
+                            current_price = float(close_data.iloc[-1])
+                            previous_price = float(close_data.iloc[0]) if len(close_data) > 1 else current_price
+                            company_name = COMPANY_NAMES.get(ticker, ticker)
+                            results[ticker] = {
+                                "current": current_price,
+                                "previous": previous_price,
+                                "name": company_name,
+                                "history": data.tail(24)
+                            }
+            except:
+                pass
+        
+        # 如果批量下載沒有獲取到所有股票，回退到逐個獲取
+        missing_tickers = [t for t in tickers if t not in results]
+        if missing_tickers:
+            for ticker in missing_tickers:
+                try:
+                    if mode == "realtime":
+                        current, previous, hist = fetch_ticker_data_realtime(ticker)
+                    else:
+                        current, previous, hist = fetch_ticker_data_1day(ticker)
+                    
+                    if current is not None:
+                        company_name = COMPANY_NAMES.get(ticker, ticker)
+                        results[ticker] = {
+                            "current": current,
+                            "previous": previous,
+                            "name": company_name,
+                            "history": hist
+                        }
+                except:
+                    pass
     
-    # 使用線程池並行處理
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(fetch_one, ticker): ticker for ticker in tickers}
-        for future in as_completed(futures):
-            ticker, result = future.result()
-            current, previous, hist = result
-            if current is not None:
-                # 從字典中獲取公司名稱
-                company_name = COMPANY_NAMES.get(ticker, ticker)
-                results[ticker] = {
-                    "current": current,
-                    "previous": previous,
-                    "name": company_name,
-                    "history": hist
-                }
+    except Exception as e:
+        # 如果批量下載完全失敗，回退到逐個獲取
+        for ticker in tickers:
+            try:
+                if mode == "realtime":
+                    current, previous, hist = fetch_ticker_data_realtime(ticker)
+                else:
+                    current, previous, hist = fetch_ticker_data_1day(ticker)
+                
+                if current is not None:
+                    company_name = COMPANY_NAMES.get(ticker, ticker)
+                    results[ticker] = {
+                        "current": current,
+                        "previous": previous,
+                        "name": company_name,
+                        "history": hist
+                    }
+            except:
+                pass
     
     return results
 
@@ -219,8 +320,8 @@ with main_tab1:
     if st.session_state.tw_mode:
         with st.spinner(f"正在載入台股數據（{'即時' if st.session_state.tw_mode == 'realtime' else '一日內'}）..."):
             tw_tickers = get_tw_tickers()
-            # 使用並行處理獲取數據
-            results = fetch_multiple_tickers_parallel(tw_tickers, st.session_state.tw_mode)
+            # 使用批量下載獲取數據
+            results = fetch_multiple_tickers_batch(tw_tickers, st.session_state.tw_mode)
             st.session_state.tw_data = results
             
             # 檢查失敗的股票
@@ -300,8 +401,8 @@ with main_tab2:
     if st.session_state.us_mode:
         with st.spinner(f"正在載入美股數據（{'即時' if st.session_state.us_mode == 'realtime' else '一日內'}）..."):
             us_tickers = get_us_tickers()
-            # 使用並行處理獲取數據
-            results = fetch_multiple_tickers_parallel(us_tickers, st.session_state.us_mode)
+            # 使用批量下載獲取數據
+            results = fetch_multiple_tickers_batch(us_tickers, st.session_state.us_mode)
             st.session_state.us_data = results
             
             # 檢查失敗的股票
